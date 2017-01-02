@@ -3,6 +3,7 @@
  * Copyright (C) 2005-2007   Ivo Clarysse
  *
  * Adapted to gstreamer-0.10 2006 David Siorpaes
+ * Adapted to output to snapcast 2017 Daniel Jäcksch
  *
  * This file is part of GMediaRender.
  *
@@ -510,15 +511,82 @@ static int output_gstreamer_init(void)
 		GstElement *sink = NULL;
 		Log_info("gstreamer", "Setting audio sink to %s; device=%s\n",
 			 audio_sink, audio_device ? audio_device : "");
-		sink = gst_element_factory_make (audio_sink, "sink");
-		if (sink == NULL) {
-		  Log_error("gstreamer", "Couldn't create sink '%s'",
-			    audio_sink);
-		} else {
-		  if (audio_device != NULL) {
-		    g_object_set (G_OBJECT(sink), "device", audio_device, NULL);
-		  }
-		  g_object_set (G_OBJECT (player_), "audio-sink", sink, NULL);
+			 
+		if (strcmp(audio_sink,"snapcast")==0) {
+			
+#if (GST_VERSION_MAJOR < 1)
+			Log_Error("gstreamer","Sorry gstreamer-1.x needed for snapcast\n");
+#else
+				
+			// Declare Pipeline objects for gstreamer
+			
+			GstElement *filesink=NULL;
+			GstElement *resample=NULL;
+			GstElement *convert=NULL;
+			GstElement *capsfilter = NULL;
+			GstElement *sinkbin=NULL;
+			GstPad *pad=NULL;
+
+			//sink = gst_parse_bin_from_description("audioresample ! audioconvert ! audio/x-raw,rate=44100,channels=2,format=S16LE ! filesink location=\"/tmp/upnp\"",TRUE,NULL);
+
+			// Create pipeline objects 
+
+			resample  =gst_element_factory_make("audioresample", "resample");
+			convert   =gst_element_factory_make("audioconvert", "convert");
+			filesink  =gst_element_factory_make("filesink","filesink");
+			capsfilter=gst_element_factory_make("capsfilter","filter");
+	
+			// Configure Pipeline obejcts
+	
+			g_object_set (G_OBJECT(filesink), "location", audio_device, NULL);  
+	
+			GstCaps *caps=NULL;
+			caps = gst_caps_new_simple ("audio/x-raw",
+										"format", G_TYPE_STRING,"S16LE",
+										"rate", G_TYPE_INT, 44100,
+										"channels", G_TYPE_INT, 2,
+										NULL);
+			g_object_set(G_OBJECT(capsfilter),"caps",caps,NULL);
+    
+			// Link pipeline objects together
+
+			sink=gst_pipeline_new("pipesink");    
+			gst_bin_add_many (GST_BIN (sink),resample,convert,capsfilter,filesink, NULL);
+			gst_element_link_many(resample,convert,capsfilter,filesink, NULL);
+			gst_caps_unref (caps);
+	    
+			// Wrap pipeline in Ghostbin and Create Ghostpad
+		
+			sinkbin=gst_bin_new("sink");
+			gst_bin_add(GST_BIN(sinkbin),sink);
+	
+			/* Add Ghostpad */
+	
+			pad = gst_element_get_static_pad(resample,"sink");
+			if (pad==NULL) {
+				Log_error("gstreamer","Kein Pad bekommen\n");
+			}
+			gst_element_add_pad(sinkbin,gst_ghost_pad_new("sink",pad));
+			gst_object_unref(GST_OBJECT(pad));
+	
+			// Link new created output device to player
+	
+			g_object_set (G_OBJECT (player_), "audio-sink", sinkbin, NULL);
+
+#endif	
+		}	 
+		else
+		{ 
+			sink = gst_element_factory_make (audio_sink, "sink");
+			if (sink == NULL) {
+			  Log_error("gstreamer", "Couldn't create sink '%s'",
+				    audio_sink);
+			} else {
+			  if (audio_device != NULL) {
+			    g_object_set (G_OBJECT(sink), "device", audio_device, NULL);
+			  }
+			  g_object_set (G_OBJECT (player_), "audio-sink", sink, NULL);
+			}
 		}
 	}
 	if (videosink != NULL) {
